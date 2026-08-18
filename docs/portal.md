@@ -66,6 +66,15 @@ rayfin up
 `rayfin up` provisions the Fabric App item, the SQL database, and the static frontend on
 your Fabric capacity.
 
+> **Windows one-shot:** `scripts/setup/deploy-portal.ps1` wraps the steps above (deps →
+> login → dry-run → confirm → `rayfin up`) and can chain into `init-catalog.ps1`:
+>
+> ```powershell
+> .\scripts\setup\deploy-portal.ps1 -DryRun                 # preview
+> .\scripts\setup\deploy-portal.ps1 -Yes                    # deploy
+> .\scripts\setup\deploy-portal.ps1 -Yes -CatalogWorkspaceId <guid> -SetRepoVars
+> ```
+
 ### Confirm the generated SQL identifiers
 
 Rayfin preserves TypeScript property names as SQL **columns** (camelCase, e.g.
