@@ -41,7 +41,7 @@ app/
     schema.ts           # PortalSchema = [SandboxRequest]
   src/
     pages/HomePage.tsx        # intake form + catalog table
-    pages/AuthPage.tsx        # Fabric sign-in
+    components/AuthPage.tsx   # Fabric sign-in
     services/
       sandboxRequests.ts      # catalog CRUD (get + create) w/ in-memory fallback
       submit.ts               # single UI submission seam (Option C extension point)
