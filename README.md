@@ -56,8 +56,15 @@ tests/
 
 ## Quick start
 
-**Fast path:** fork the repo, then from Azure Cloud Shell (or any bash shell with
-`az` and `gh` signed in) run `./scripts/setup/bootstrap.sh --capacity-id <guid>`.
+**Fast path:** fork the repo, then run the setup script — `bash` or PowerShell,
+whichever fits your shell — from Azure Cloud Shell or any machine with `az` and
+`gh` signed in:
+
+```bash
+./scripts/setup/bootstrap.sh  --capacity-id <guid>   # bash / Cloud Shell / WSL / macOS
+.\scripts\setup\bootstrap.ps1 -CapacityId  <guid>    # native Windows PowerShell
+```
+
 It automates steps 2, 6, and 7 below and most of 4–5; see
 [`docs/bootstrap.md`](docs/bootstrap.md) for the three remaining Fabric-admin steps.
 

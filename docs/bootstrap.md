@@ -3,15 +3,19 @@
 ## Automated setup (recommended)
 
 Most of steps 1–5 below are scripted. After forking, from Azure Cloud Shell
-(zero install; `az` and `gh` are preinstalled and signed in) or any bash shell
-with the Azure CLI and GitHub CLI signed in:
+(zero install; `az` and `gh` are preinstalled and signed in) or any shell with
+the Azure CLI and GitHub CLI signed in:
 
 ```bash
 gh auth login          # if not already authenticated in this shell
-./scripts/setup/bootstrap.sh --capacity-id <fabric-capacity-guid>
+# bash (Cloud Shell, WSL, macOS, Git Bash):
+./scripts/setup/bootstrap.sh  --capacity-id <fabric-capacity-guid>
+# or native Windows PowerShell:
+.\scripts\setup\bootstrap.ps1 -CapacityId  <fabric-capacity-guid>
 ```
 
-The script is idempotent and creates/reuses:
+The two scripts are equivalent; use whichever matches your shell. Both are
+idempotent and create/reuse:
 
 - an Entra app registration + service principal;
 - OIDC federated credentials for all five deployment environments (no client secret);
@@ -19,9 +23,9 @@ The script is idempotent and creates/reuses:
 - repository variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
   `FABRIC_CAPACITY_ID`, and (with `--domain-id`) `FABRIC_DOMAIN_ID`.
 
-Run `./scripts/setup/bootstrap.sh --help` for all flags, or add `--dry-run` to
-preview every change without touching Azure or GitHub. Windows users: use Cloud
-Shell or Git Bash.
+Run `./scripts/setup/bootstrap.sh --help` (or `Get-Help .\scripts\setup\bootstrap.ps1`)
+for all flags, or add `--dry-run` / `-DryRun` to preview every change without
+touching Azure or GitHub.
 
 Three things stay manual because they require Fabric-admin rights or interactive
 auth — the script prints them as a checklist when it finishes, and they map to
@@ -30,7 +34,8 @@ the sections below:
 1. Enable the tenant setting **"Service principals can use Fabric APIs"** (§2).
 2. Add the service principal as a **capacity admin** (§2).
 3. Create the **Fabric → GitHub connection** in the portal, then re-run with
-   `--connection-id <guid>` to store the `FABRIC_GITHUB_CONNECTION_ID` secret (§3).
+   `--connection-id <guid>` / `-ConnectionId <guid>` to store the
+   `FABRIC_GITHUB_CONNECTION_ID` secret (§3).
 
 Steps 6–7 (registering persistent workspaces and the smoke test) are always
 yours to run. The rest of this document is the manual reference behind the
