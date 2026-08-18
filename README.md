@@ -56,6 +56,11 @@ tests/
 
 ## Quick start
 
+**Fast path:** fork the repo, then from Azure Cloud Shell (or any bash shell with
+`az` and `gh` signed in) run `./scripts/setup/bootstrap.sh --capacity-id <guid>`.
+It automates steps 2, 6, and 7 below and most of 4–5; see
+[`docs/bootstrap.md`](docs/bootstrap.md) for the three remaining Fabric-admin steps.
+
 1. Read [`docs/architecture.md`](docs/architecture.md) and [`docs/bootstrap.md`](docs/bootstrap.md).
 2. Create the Entra application and GitHub OIDC federated credential.
 3. Enable the required Fabric tenant settings for a dedicated automation security group.
