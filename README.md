@@ -13,6 +13,15 @@ A production-oriented scaffold for **Pattern 2: multiple workspaces on one share
 | Validate | `validate.yml` | Validates manifests, lifecycle boundaries, registry IDs, and tests. |
 | Expiry review | `expire-sandboxes.yml` | Opens a cleanup issue for expired active sandboxes. It does not silently delete them. |
 
+## Optional: self-service portal
+
+The GitHub Issue Form is the canonical entry point. For a friendlier front door, [`app/`](app/)
+contains a small **Microsoft Fabric App (Rayfin, preview)** that lets signed-in users submit
+requests through a form and browse a **catalog of sandboxes** stored in a Fabric SQL database.
+A scheduled [catalog bridge](scripts/catalog-bridge/) turns each new catalog row into a labelled
+GitHub issue, which triggers `request-workspace.yml` — so the portal is purely additive and needs
+no GitHub credential of its own. See [`docs/portal.md`](docs/portal.md).
+
 ## Repository layout
 
 ```text

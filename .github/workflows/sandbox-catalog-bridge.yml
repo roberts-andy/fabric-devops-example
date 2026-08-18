@@ -1,0 +1,53 @@
+name: Sandbox catalog bridge
+# Option B: the Rayfin portal only writes catalog rows. This scheduled job reads
+# `Requested` rows from the Fabric SQL catalog and opens labelled GitHub issues,
+# which trigger request-workspace.yml. No GitHub credential lives in the app.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List Requested rows without opening issues"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+concurrency:
+  group: sandbox-catalog-bridge
+  cancel-in-progress: false
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    environment: fabric-sandbox-provision
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install bridge dependencies
+        working-directory: scripts/catalog-bridge
+        run: npm install --no-audit --no-fund
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Acquire Fabric SQL token
+        run: |
+          token=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+          echo "::add-mask::$token"
+          echo "SQL_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Run catalog bridge
+        working-directory: scripts/catalog-bridge
+        env:
+          SQL_SERVER: ${{ vars.CATALOG_SQL_SERVER }}
+          SQL_DATABASE: ${{ vars.CATALOG_SQL_DATABASE }}
+          CATALOG_SCHEMA: ${{ vars.CATALOG_SCHEMA }}
+          CATALOG_TABLE: ${{ vars.CATALOG_TABLE }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: node index.mjs

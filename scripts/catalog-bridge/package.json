@@ -1,0 +1,14 @@
+{
+  "name": "fabric-sandbox-catalog-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads Requested rows from the Fabric SQL catalog and opens labelled GitHub issues that drive the existing sandbox provisioning automation.",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "mssql": "^11.0.1"
+  }
+}
