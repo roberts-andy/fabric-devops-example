@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["api_version", "lifecycle", "slug", "kind", "display_name", "owner", "expires_at", "git", "post_deploy"],
+  "properties": {
+    "api_version": {"const": 1},
+    "lifecycle": {"const": "sandbox"},
+    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,39}$"},
+    "kind": {"enum": ["team", "personal"]},
+    "display_name": {"type": "string", "minLength": 3, "maxLength": 200},
+    "description": {"type": "string", "maxLength": 4000},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "owner": {
+      "type": "object", "required": ["principal_id", "principal_type", "role"],
+      "properties": {
+        "principal_id": {"type": "string", "format": "uuid"},
+        "principal_type": {"enum": ["User", "Group"]},
+        "role": {"enum": ["Admin", "Member", "Contributor", "Viewer"]}
+      }
+    },
+    "git": {"type": "object", "required": ["directory"], "properties": {"directory": {"type": "string"}}},
+    "post_deploy": {"type": "object"}
+  }
+}

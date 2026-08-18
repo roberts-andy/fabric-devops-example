@@ -1,0 +1,28 @@
+name: Find expired Fabric sandboxes
+on:
+  schedule: [{cron: "17 5 * * *"}]
+  workflow_dispatch: {}
+permissions: {contents: read, issues: write}
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open one expiry issue
+        env: {GH_TOKEN: "${{ github.token }}", REPO: "${{ github.repository }}"}
+        run: |
+          python - <<'PY' >/tmp/expired.txt
+          import datetime as dt, glob, json
+          now=dt.datetime.now(dt.timezone.utc)
+          for p in glob.glob('registry/sandboxes/*.json'):
+              r=json.load(open(p))
+              if r.get('status')!='active': continue
+              exp=dt.datetime.fromisoformat(r['expires_at'].replace('Z','+00:00'))
+              if exp <= now: print(f"- {r['slug']}: {r['display_name']} (expired {r['expires_at']})")
+          PY
+          if [[ -s /tmp/expired.txt ]]; then
+            if ! gh issue list --repo "$REPO" --label fabric-sandbox-expiry --state open --json number --jq 'length' | grep -q '^1$'; then
+              { echo 'The following Fabric sandboxes are expired. Run **Delete Fabric sandbox (preserve Git)** for each entry after owner review.'; echo; cat /tmp/expired.txt; } >/tmp/body.md
+              gh issue create --repo "$REPO" --title "Expired Fabric sandboxes require cleanup" --label fabric-sandbox-expiry --body-file /tmp/body.md
+            fi
+          fi

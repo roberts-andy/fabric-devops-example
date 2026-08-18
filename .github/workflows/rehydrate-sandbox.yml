@@ -1,0 +1,68 @@
+name: Rehydrate Fabric sandbox from Git
+on:
+  workflow_dispatch:
+    inputs:
+      sandbox_key: {description: "Sandbox key", required: true, type: string}
+      display_name_override: {description: "Optional new display name", required: false, type: string}
+      ttl_days: {description: "Renewed TTL in days (1-90)", required: true, default: "30", type: string}
+permissions: {contents: write, id-token: write}
+concurrency:
+  group: fabric-sandbox-${{ inputs.sandbox_key }}
+  cancel-in-progress: false
+jobs:
+  rehydrate:
+    runs-on: ubuntu-latest
+    environment: fabric-sandbox-provision
+    env:
+      SLUG: ${{ inputs.sandbox_key }}
+      DISPLAY_OVERRIDE: ${{ inputs.display_name_override }}
+      TTL_DAYS: ${{ inputs.ttl_days }}
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+      FABRIC_DOMAIN_ID: ${{ vars.FABRIC_DOMAIN_ID }}
+      FABRIC_GITHUB_CONNECTION_ID: ${{ secrets.FABRIC_GITHUB_CONNECTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r scripts/requirements.txt
+      - name: Validate preserved source
+        run: |
+          [[ "$SLUG" =~ ^[a-z][a-z0-9-]{2,39}$ ]] || exit 1
+          test -f "registry/sandboxes/$SLUG.json"
+          test -d "sandboxes/$SLUG/fabric"
+          python - <<'PY'
+          import datetime as dt, json, os, pathlib
+          ttl=int(os.environ['TTL_DAYS']); assert 1 <= ttl <= 90
+          reg=json.load(open(f"registry/sandboxes/{os.environ['SLUG']}.json"))
+          assert reg['lifecycle']=='sandbox' and reg['status']=='deleted'
+          path=pathlib.Path(f"sandboxes/{os.environ['SLUG']}/workspace.yaml")
+          manifest=json.loads(path.read_text())
+          manifest['expires_at']=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=ttl)).replace(microsecond=0).isoformat().replace('+00:00','Z')
+          if os.environ.get('DISPLAY_OVERRIDE'): manifest['display_name']=os.environ['DISPLAY_OVERRIDE']
+          path.write_text(json.dumps(manifest, indent=2)+'\n')
+          PY
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Recreate and update from Git
+        run: |
+          token=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+          echo "::add-mask::$token"; export FABRIC_TOKEN="$token"
+          name_args=(); if [[ -n "$DISPLAY_OVERRIDE" ]]; then name_args=(--display-name "$DISPLAY_OVERRIDE"); fi
+          python scripts/fabric_workspace.py rehydrate \
+            --registry "registry/sandboxes/$SLUG.json" "${name_args[@]}" \
+            --capacity-id "$FABRIC_CAPACITY_ID" --domain-id "$FABRIC_DOMAIN_ID" \
+            --github-owner "${{ github.repository_owner }}" --github-repository "${{ github.event.repository.name }}" \
+            --branch "${{ github.event.repository.default_branch }}" --git-directory "sandboxes/$SLUG/fabric" \
+            --connection-id "$FABRIC_GITHUB_CONNECTION_ID" --manifest "sandboxes/$SLUG/workspace.yaml" \
+            --output /tmp/fabric-result.json
+          python scripts/registry.py provision --manifest "sandboxes/$SLUG/workspace.yaml" --result /tmp/fabric-result.json
+          git config user.name fabric-platform-bot
+          git config user.email fabric-platform-bot@users.noreply.github.com
+          git add "registry/sandboxes/$SLUG.json" "sandboxes/$SLUG/workspace.yaml"
+          git commit -m "chore(fabric): rehydrate sandbox $SLUG"
+          git pull --rebase
+          git push

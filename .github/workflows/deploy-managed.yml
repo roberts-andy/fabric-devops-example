@@ -1,0 +1,63 @@
+name: Deploy enterprise-managed Fabric assets
+on:
+  push:
+    branches: [main]
+    paths: ["fabric/managed/**"]
+  workflow_dispatch:
+    inputs:
+      target: {description: "Target key from config/managed-workspaces.yaml", required: true, type: string}
+permissions: {contents: read, id-token: write}
+concurrency:
+  group: fabric-managed-${{ github.ref }}-${{ inputs.target || 'changed' }}
+  cancel-in-progress: false
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      count: ${{ steps.targets.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - id: targets
+        env:
+          TARGET: ${{ inputs.target }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          args=(--config config/managed-workspaces.yaml --github-output "$GITHUB_OUTPUT")
+          if [[ -n "$TARGET" ]]; then args+=(--target "$TARGET"); else args+=(--before "$BEFORE" --sha "$SHA"); fi
+          python scripts/select_managed_targets.py "${args[@]}"
+  deploy:
+    needs: select
+    if: needs.select.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    environment: fabric-managed-${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r scripts/requirements.txt
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Git-authoritative deployment
+        env:
+          WORKSPACE_ID: ${{ matrix.workspace_id }}
+          GIT_DIRECTORY: ${{ matrix.git_directory }}
+          TARGET_BRANCH: ${{ matrix.branch }}
+          CONNECTION_ID: ${{ secrets.FABRIC_GITHUB_CONNECTION_ID }}
+        run: |
+          token=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+          echo "::add-mask::$token"; export FABRIC_TOKEN="$token"
+          python scripts/fabric_workspace.py deploy-existing \
+            --workspace-id "$WORKSPACE_ID" --github-owner "${{ github.repository_owner }}" \
+            --github-repository "${{ github.event.repository.name }}" --branch "$TARGET_BRANCH" \
+            --git-directory "$GIT_DIRECTORY" --connection-id "$CONNECTION_ID"

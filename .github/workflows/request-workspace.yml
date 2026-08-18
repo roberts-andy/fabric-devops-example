@@ -1,0 +1,98 @@
+name: Request Fabric sandbox
+on:
+  issues:
+    types: [opened]
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+concurrency:
+  group: fabric-request-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  parse:
+    if: contains(github.event.issue.labels.*.name, 'fabric-workspace-request')
+    runs-on: ubuntu-latest
+    outputs:
+      display_name: ${{ steps.parse.outputs.display_name }}
+      slug: ${{ steps.parse.outputs.slug }}
+      kind: ${{ steps.parse.outputs.kind }}
+      owner_principal_type: ${{ steps.parse.outputs.owner_principal_type }}
+      owner_principal_id: ${{ steps.parse.outputs.owner_principal_id }}
+      ttl_days: ${{ steps.parse.outputs.ttl_days }}
+      purpose: ${{ steps.parse.outputs.purpose }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: parse
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: python scripts/parse_workspace_request.py --body-env ISSUE_BODY --github-output "$GITHUB_OUTPUT"
+  provision:
+    needs: parse
+    runs-on: ubuntu-latest
+    environment: fabric-sandbox-provision
+    env:
+      DISPLAY_NAME: ${{ needs.parse.outputs.display_name }}
+      SANDBOX_SLUG: ${{ needs.parse.outputs.slug }}
+      SANDBOX_KIND: ${{ needs.parse.outputs.kind }}
+      OWNER_TYPE: ${{ needs.parse.outputs.owner_principal_type }}
+      OWNER_ID: ${{ needs.parse.outputs.owner_principal_id }}
+      TTL_DAYS: ${{ needs.parse.outputs.ttl_days }}
+      PURPOSE: ${{ needs.parse.outputs.purpose }}
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+      FABRIC_DOMAIN_ID: ${{ vars.FABRIC_DOMAIN_ID }}
+      FABRIC_GITHUB_CONNECTION_ID: ${{ secrets.FABRIC_GITHUB_CONNECTION_ID }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.repository.default_branch }}", fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r scripts/requirements.txt
+      - name: Build request and repository folder
+        run: |
+          python - <<'PY'
+          import json, os
+          keys=['DISPLAY_NAME','SANDBOX_SLUG','SANDBOX_KIND','OWNER_TYPE','OWNER_ID','TTL_DAYS','PURPOSE']
+          v={k:os.environ[k] for k in keys}
+          out={'display_name':v['DISPLAY_NAME'],'slug':v['SANDBOX_SLUG'],'kind':v['SANDBOX_KIND'],'owner_principal_type':v['OWNER_TYPE'],'owner_principal_id':v['OWNER_ID'],'ttl_days':int(v['TTL_DAYS']),'purpose':v['PURPOSE']}
+          open('/tmp/request.json','w').write(json.dumps(out))
+          PY
+          python scripts/scaffold_sandbox.py --request /tmp/request.json
+          python scripts/validate_repo.py .
+          git config user.name fabric-platform-bot
+          git config user.email fabric-platform-bot@users.noreply.github.com
+          git add "sandboxes/$SANDBOX_SLUG"
+          git commit -m "chore(fabric): scaffold sandbox $SANDBOX_SLUG"
+          git push origin "HEAD:$DEFAULT_BRANCH"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Acquire Fabric token
+        run: |
+          token=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+          echo "::add-mask::$token"
+          echo "FABRIC_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Provision, connect, initialize, and seed
+        run: |
+          python scripts/fabric_workspace.py provision \
+            --display-name "$DISPLAY_NAME" --description "$PURPOSE" \
+            --capacity-id "$FABRIC_CAPACITY_ID" --domain-id "$FABRIC_DOMAIN_ID" \
+            --owner-principal-id "$OWNER_ID" --owner-principal-type "$OWNER_TYPE" \
+            --github-owner "${{ github.repository_owner }}" --github-repository "${{ github.event.repository.name }}" \
+            --branch "$DEFAULT_BRANCH" --git-directory "sandboxes/$SANDBOX_SLUG/fabric" \
+            --connection-id "$FABRIC_GITHUB_CONNECTION_ID" \
+            --manifest "sandboxes/$SANDBOX_SLUG/workspace.yaml" --output /tmp/fabric-result.json
+          python scripts/registry.py provision --manifest "sandboxes/$SANDBOX_SLUG/workspace.yaml" --result /tmp/fabric-result.json
+          git add "registry/sandboxes/$SANDBOX_SLUG.json"
+          git commit -m "chore(fabric): register sandbox $SANDBOX_SLUG"
+          git pull --rebase origin "$DEFAULT_BRANCH"
+          git push origin "HEAD:$DEFAULT_BRANCH"
+      - name: Comment result
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          id=$(python -c 'import json; print(json.load(open("/tmp/fabric-result.json"))["workspace_id"])')
+          gh issue comment "${{ github.event.issue.number }}" --body "Provisioned **$DISPLAY_NAME**. Workspace ID: \`$id\`. Git folder: \`sandboxes/$SANDBOX_SLUG/fabric\`. Expiry is recorded in the registry."
+          gh issue close "${{ github.event.issue.number }}" --reason completed

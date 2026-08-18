@@ -1,0 +1,61 @@
+name: Fabric sandbox request
+description: Request an ephemeral team or personal Microsoft Fabric workspace
+title: "[Fabric sandbox]: "
+labels: ["fabric-workspace-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This request provisions a capacity-backed, Git-connected sandbox. Enterprise-managed workspaces use a separate protected deployment flow.
+  - type: input
+    id: workspace_name
+    attributes:
+      label: Workspace name
+      description: Friendly Fabric display name (for example, SBX - Marketing Forecast)
+    validations: {required: true}
+  - type: input
+    id: workspace_key
+    attributes:
+      label: Workspace key
+      description: 3-40 lowercase letters, numbers, and hyphens; starts with a letter
+      placeholder: marketing-forecast
+    validations: {required: true}
+  - type: dropdown
+    id: sandbox_type
+    attributes:
+      label: Sandbox type
+      options: [team, personal]
+    validations: {required: true}
+  - type: dropdown
+    id: principal_type
+    attributes:
+      label: Owner principal type
+      description: Choose Group for team sandboxes and User for personal sandboxes
+      options: [Group, User]
+    validations: {required: true}
+  - type: input
+    id: owner_id
+    attributes:
+      label: Owner Entra object ID
+      description: Object ID of the owning security group or user; email addresses are not accepted
+    validations: {required: true}
+  - type: input
+    id: ttl
+    attributes:
+      label: TTL in days
+      description: 1-90 days; 30 is recommended
+      value: "30"
+    validations: {required: true}
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Business purpose
+      description: Describe the experiment, data classification, and expected outcome
+    validations: {required: true}
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Acknowledgement
+      options:
+        - label: I understand that workspace compute/content is ephemeral and Git is the recovery source; OneLake table/file data is not versioned by Git.
+          required: true

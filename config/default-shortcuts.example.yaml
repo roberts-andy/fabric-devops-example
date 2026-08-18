@@ -1,0 +1,9 @@
+# Copy entries under a sandbox workspace.yaml -> post_deploy.shortcuts.
+# Values in ${...} are resolved from GitHub environment variables.
+- name: curated
+  path: Files/shared
+  target:
+    oneLake:
+      workspaceId: ${HUB_WORKSPACE_ID}
+      itemId: ${HUB_LAKEHOUSE_ID}
+      path: Tables/curated

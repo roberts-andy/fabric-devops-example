@@ -1,0 +1,8 @@
+# Demo repository — platform-critical paths are owned by the repo owner.
+# In a real deployment, replace @roberts-andy with your platform and
+# data-product owner teams (e.g. @org/fabric-platform, @org/data-product-owners).
+/.github/ @roberts-andy
+/scripts/ @roberts-andy
+/config/ @roberts-andy
+/fabric/managed/ @roberts-andy
+/registry/ @roberts-andy
