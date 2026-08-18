@@ -13,11 +13,14 @@
 #   4. Repo variables (AZURE_CLIENT_ID, tenant, subscription, capacity, domain)
 #      and — if you pass --connection-id — the Fabric GitHub connection secret.
 #
-# What it CANNOT do (Fabric-admin / portal steps — printed as a checklist):
-#   * Enable the tenant setting "Service principals can use Fabric APIs".
-#   * Add the service principal as a Fabric capacity admin.
-#   * Create the Fabric -> GitHub connection (interactive PAT auth). You create
-#     it once in the Fabric portal, then re-run with --connection-id <id>.
+# Optional one-shot Fabric-admin automation (opt in per flag; each calls the
+# Fabric REST API with your signed-in az token — you must be a Fabric admin):
+#   * --github-pat <pat>       Create the Fabric -> GitHub connection and store
+#                              its id as the FABRIC_GITHUB_CONNECTION_ID secret.
+#   * --make-capacity-admin    Add the SP to the capacity's Azure admins.
+#   * --enable-tenant-settings Enable the two developer tenant settings the SP
+#                              needs (preview admin API), scoped to a group.
+# Anything you don't opt into is printed as a checklist at the end.
 #
 # Usage:
 #   ./scripts/setup/bootstrap.sh --capacity-id <fabric-capacity-guid> [options]
@@ -32,6 +35,11 @@
 #   --repo <owner/name>      Defaults to the current gh repo
 #   --catalog-sql-server <h> Portal (rayfin) SQL server host -> repo var
 #   --catalog-sql-database <n> Portal (rayfin) SQL database  -> repo var
+#   --github-pat <pat>       Auto-create the Fabric -> GitHub connection
+#   --make-capacity-admin    Add the SP as a Fabric capacity admin
+#   --enable-tenant-settings Enable the SP developer tenant settings (preview)
+#   --sp-group-id <guid>     Existing security group for --enable-tenant-settings
+#                            (default: create '<app-name>-sp' and add the SP)
 #   --dry-run                Print what would happen, change nothing
 #   -y, --yes                Don't prompt; fail if a required value is missing
 #   -h, --help               Show this help
@@ -56,6 +64,11 @@ TENANT_ID=""
 REPO=""
 CATALOG_SQL_SERVER=""
 CATALOG_SQL_DATABASE=""
+GITHUB_PAT=""
+MAKE_CAPACITY_ADMIN=0
+ENABLE_TENANT_SETTINGS=0
+SP_GROUP_ID=""
+SP_OBJECT_ID=""
 DRY_RUN=0
 ASSUME_YES=0
 
@@ -77,6 +90,27 @@ run() {
   fi
 }
 
+# --- Fabric REST helpers (only used by the optional --flags) -----------------
+FABRIC_TOKEN=""
+fabric_token() {
+  if [ -z "$FABRIC_TOKEN" ]; then
+    FABRIC_TOKEN="$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>/dev/null || true)"
+    [ -n "$FABRIC_TOKEN" ] || { err "Could not get a Fabric access token (is 'az login' current?)"; exit 1; }
+  fi
+  printf '%s' "$FABRIC_TOKEN"
+}
+# fabric_get PATH  -> prints JSON response
+fabric_get() {
+  curl -fsS "https://api.fabric.microsoft.com/v1$1" -H "Authorization: Bearer $(fabric_token)"
+}
+# fabric_post PATH  (JSON body on stdin) -> prints JSON response.
+# Body comes via stdin so a PAT never lands in the process list.
+fabric_post() {
+  curl -fsS -X POST "https://api.fabric.microsoft.com/v1$1" \
+    -H "Authorization: Bearer $(fabric_token)" \
+    -H "Content-Type: application/json" --data-binary @-
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --app-name) APP_NAME="$2"; shift 2;;
@@ -88,6 +122,10 @@ while [ $# -gt 0 ]; do
     --repo) REPO="$2"; shift 2;;
     --catalog-sql-server) CATALOG_SQL_SERVER="$2"; shift 2;;
     --catalog-sql-database) CATALOG_SQL_DATABASE="$2"; shift 2;;
+    --github-pat) GITHUB_PAT="$2"; shift 2;;
+    --make-capacity-admin) MAKE_CAPACITY_ADMIN=1; shift;;
+    --enable-tenant-settings) ENABLE_TENANT_SETTINGS=1; shift;;
+    --sp-group-id) SP_GROUP_ID="$2"; shift 2;;
     --dry-run) DRY_RUN=1; shift;;
     -y|--yes) ASSUME_YES=1; shift;;
     -h|--help) usage;;
@@ -148,6 +186,11 @@ if [ "$DRY_RUN" -ne 1 ]; then
   az ad sp show --id "$APP_ID" >/dev/null 2>&1 || az ad sp create --id "$APP_ID" >/dev/null
 fi
 ok "Service principal present"
+if [ "$DRY_RUN" -eq 1 ]; then
+  SP_OBJECT_ID="00000000-0000-0000-0000-000000000000"
+else
+  SP_OBJECT_ID="$(az ad sp show --id "$APP_ID" --query id -o tsv 2>/dev/null || true)"
+fi
 
 # --- 2. Federated credentials ----------------------------------------------
 step "2/4  Federated credentials (OIDC, no client secret)"
@@ -179,6 +222,27 @@ run gh label create fabric-sandbox-expiry --repo "$REPO" --color FBCA04 \
   --description "Fabric sandbox nearing/at expiry" --force >/dev/null
 ok "label  fabric-sandbox-expiry"
 
+# --- 3b. Optional: create the Fabric -> GitHub connection -------------------
+if [ -n "$GITHUB_PAT" ] && [ -z "$CONNECTION_ID" ]; then
+  step "3b   Fabric -> GitHub connection (optional)"
+  CONN_NAME="${APP_NAME}-github"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s    [dry-run]%s POST /connections  (GitHubSourceControl, displayName=%s, PAT hidden)\n' "$c_dim" "$c_off" "$CONN_NAME"
+    CONNECTION_ID="00000000-0000-0000-0000-000000000000"
+    ok "would create connection $CONN_NAME"
+  else
+    CONNECTION_ID="$(fabric_get /connections | python -c "import sys,json;n=sys.argv[1];print(next((c['id'] for c in json.load(sys.stdin).get('value',[]) if c.get('displayName')==n),''))" "$CONN_NAME")"
+    if [ -n "$CONNECTION_ID" ]; then
+      ok "Reusing connection $CONN_NAME ($CONNECTION_ID)"
+    else
+      body="$(printf '{"connectivityType":"ShareableCloud","displayName":"%s","connectionDetails":{"type":"GitHubSourceControl","creationMethod":"GitHubSourceControl.Contents","parameters":[{"dataType":"Text","name":"url","value":"https://github.com/%s"}]},"credentialDetails":{"credentials":{"credentialType":"Key","key":"%s"}}}' "$CONN_NAME" "$REPO" "$GITHUB_PAT")"
+      CONNECTION_ID="$(printf '%s' "$body" | fabric_post /connections | python -c "import sys,json;print(json.load(sys.stdin).get('id',''))")"
+      [ -n "$CONNECTION_ID" ] || { err "Connection create did not return an id"; exit 1; }
+      ok "Created connection $CONN_NAME ($CONNECTION_ID)"
+    fi
+  fi
+fi
+
 # --- 4. Repo variables + secrets -------------------------------------------
 step "4/4  Repo variables and secrets"
 set_var()    { run gh variable set "$1" --repo "$REPO" --body "$2" >/dev/null; ok "var     $1"; }
@@ -196,31 +260,105 @@ else
   warn "FABRIC_GITHUB_CONNECTION_ID not set — provisioning needs it (see checklist below)"
 fi
 
-# --- remaining manual steps -------------------------------------------------
+# --- 5. Optional: make the SP a Fabric capacity admin ----------------------
+if [ "$MAKE_CAPACITY_ADMIN" -eq 1 ]; then
+  step "5    Fabric capacity admin (optional)"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s    [dry-run]%s resolve capacity %s -> ARM, append SP %s to administration.members\n' "$c_dim" "$c_off" "$CAPACITY_ID" "$SP_OBJECT_ID"
+    ok "would add $APP_NAME as a capacity admin"
+  else
+    disp="$(fabric_get /capacities | python -c "import sys,json;i=sys.argv[1];print(next((c.get('displayName','') for c in json.load(sys.stdin).get('value',[]) if c.get('id')==i),''))" "$CAPACITY_ID")"
+    if [ -z "$disp" ]; then
+      warn "Capacity $CAPACITY_ID not visible via the Fabric API — skipping (do it in Admin portal -> Capacity settings)"
+    else
+      read -r arm_name arm_rg < <(az fabric capacity list --query "[?name=='$disp'].[name,resourceGroup] | [0]" -o tsv 2>/dev/null || true)
+      if [ -z "${arm_name:-}" ]; then
+        warn "No Azure Fabric capacity named '$disp' found — skipping"
+      else
+        mapfile -t members < <(az fabric capacity show -n "$arm_name" -g "$arm_rg" --query 'properties.administration.members' -o tsv 2>/dev/null || true)
+        found=0; for m in "${members[@]:-}"; do [ "$m" = "$SP_OBJECT_ID" ] && found=1; done
+        if [ "$found" -eq 1 ]; then
+          ok "SP is already a capacity admin on $arm_name"
+        else
+          newlist="$SP_OBJECT_ID"; for m in "${members[@]:-}"; do [ -n "$m" ] && newlist="$m,$newlist"; done
+          az fabric capacity update -n "$arm_name" -g "$arm_rg" --administration "members=[$newlist]" >/dev/null
+          ok "Added SP as a capacity admin on $arm_name"
+        fi
+      fi
+    fi
+  fi
+fi
+
+# --- 6. Optional: enable the SP developer tenant settings (preview) --------
+if [ "$ENABLE_TENANT_SETTINGS" -eq 1 ]; then
+  step "6    Fabric tenant settings (optional, preview admin API)"
+  group_name="${APP_NAME}-sp"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ -z "$SP_GROUP_ID" ]; then
+      printf '%s    [dry-run]%s create/reuse security group '\''%s'\'' and add SP %s\n' "$c_dim" "$c_off" "$group_name" "$SP_OBJECT_ID"
+      SP_GROUP_ID="00000000-0000-0000-0000-000000000000"
+    fi
+    for s in ServicePrincipalAccessPermissionAPIs ServicePrincipalAccessGlobalAPIs; do
+      printf '%s    [dry-run]%s POST /admin/tenantsettings/%s/update  (enabled=true, group=%s)\n' "$c_dim" "$c_off" "$s" "$SP_GROUP_ID"
+      ok "would enable $s"
+    done
+  else
+    if [ -z "$SP_GROUP_ID" ]; then
+      SP_GROUP_ID="$(az ad group list --display-name "$group_name" --query '[0].id' -o tsv 2>/dev/null || true)"
+      if [ -z "$SP_GROUP_ID" ]; then
+        SP_GROUP_ID="$(az ad group create --display-name "$group_name" --mail-nickname "$group_name" --query id -o tsv)"
+        ok "Created security group $group_name ($SP_GROUP_ID)"
+      else
+        ok "Reusing security group $group_name ($SP_GROUP_ID)"
+      fi
+      az ad group member add --group "$SP_GROUP_ID" --member-id "$SP_OBJECT_ID" >/dev/null 2>&1 || true
+      ok "SP is a member of $group_name"
+    else
+      group_name="$(az ad group show --group "$SP_GROUP_ID" --query displayName -o tsv 2>/dev/null || echo sp-group)"
+      ok "Using existing security group $group_name ($SP_GROUP_ID)"
+    fi
+    for s in ServicePrincipalAccessPermissionAPIs ServicePrincipalAccessGlobalAPIs; do
+      body="$(printf '{"enabled":true,"enabledSecurityGroups":[{"graphId":"%s","name":"%s"}]}' "$SP_GROUP_ID" "$group_name")"
+      printf '%s' "$body" | fabric_post "/admin/tenantsettings/$s/update" >/dev/null
+      ok "enabled $s"
+    done
+  fi
+fi
+
+# --- remaining manual steps (only what wasn't automated) --------------------
 SP_DISPLAY="$APP_NAME"
-cat <<EOF
+did_conn=0;   [ -n "$CONNECTION_ID" ] && did_conn=1
+did_cap=0;    [ "$MAKE_CAPACITY_ADMIN" -eq 1 ] && did_cap=1
+did_tenant=0; [ "$ENABLE_TENANT_SETTINGS" -eq 1 ] && did_tenant=1
 
-${c_bold}Automated wiring complete.${c_off}
+printf '\n%sAutomated wiring complete.%s\n' "$c_bold" "$c_off"
+if [ "$did_conn" -eq 1 ] && [ "$did_cap" -eq 1 ] && [ "$did_tenant" -eq 1 ]; then
+  ok "All Fabric-admin steps were automated — nothing left to do."
+else
+  printf '\n%sFinish these Fabric-admin steps (one time):%s\n' "$c_bold" "$c_off"
+  n=0
+  if [ "$did_tenant" -eq 0 ]; then
+    n=$((n+1))
+    printf '  %s. Enable the tenant setting %s"Service principals can use Fabric APIs"%s\n' "$n" "$c_bold" "$c_off"
+    printf '     Re-run with %s--enable-tenant-settings%s, or in Admin portal -> Tenant\n' "$c_bold" "$c_off"
+    printf '     settings, add a group containing %s%s%s (app id %s).\n\n' "$c_bold" "$SP_DISPLAY" "$c_off" "$APP_ID"
+  fi
+  if [ "$did_cap" -eq 0 ]; then
+    n=$((n+1))
+    printf '  %s. Make the service principal a %scapacity admin%s (id %s).\n' "$n" "$c_bold" "$c_off" "$CAPACITY_ID"
+    printf '     Re-run with %s--make-capacity-admin%s, or Admin portal -> Capacity settings.\n\n' "$c_bold" "$c_off"
+  fi
+  if [ "$did_conn" -eq 0 ]; then
+    n=$((n+1))
+    printf '  %s. Create the %sFabric -> GitHub connection%s so provisioning can push.\n' "$n" "$c_bold" "$c_off"
+    printf '     Re-run with %s--github-pat <pat>%s, or make it in the portal then re-run with\n' "$c_bold" "$c_off"
+    printf '       ./scripts/setup/bootstrap.sh --connection-id <connection-guid>\n\n'
+  fi
+fi
 
-${c_bold}Finish these Fabric-admin steps (one time):${c_off}
-  1. Enable the tenant setting ${c_bold}"Service principals can use Fabric APIs"${c_off}
-     Fabric portal -> Admin portal -> Tenant settings -> Developer settings.
-     Add the security group that contains ${c_bold}${SP_DISPLAY}${c_off} (app id ${APP_ID}).
-
-  2. Make the service principal a ${c_bold}capacity admin${c_off} on your Fabric capacity
-     (id ${CAPACITY_ID}): Admin portal -> Capacity settings -> your capacity ->
-     Contributors/Admins -> add ${c_bold}${SP_DISPLAY}${c_off}.
-
-  3. Create a ${c_bold}Fabric -> GitHub connection${c_off} (once), then re-run:
-     Fabric portal -> Settings -> Manage connections and gateways -> New connection
-     (GitHub, authorize with a PAT). Copy its connection id, then:
-       ./scripts/setup/bootstrap.sh --connection-id <connection-guid>
-
-${c_dim}Optional self-service portal (rayfin app): after 'rayfin up', re-run with
-  --catalog-sql-server <host> --catalog-sql-database <db>  to wire the bridge.${c_off}
-
-Verify anytime:
-  gh variable list --repo ${REPO}
-  gh secret list   --repo ${REPO}
-  az ad app federated-credential list --id ${APP_ID} --query '[].subject' -o tsv
-EOF
+printf '%sOptional self-service portal (rayfin app): after '\''rayfin up'\'', re-run with\n' "$c_dim"
+printf '  --catalog-sql-server <host> --catalog-sql-database <db>  to wire the bridge.%s\n\n' "$c_off"
+printf 'Verify anytime:\n'
+printf '  gh variable list --repo %s\n' "$REPO"
+printf '  gh secret list   --repo %s\n' "$REPO"
+printf "  az ad app federated-credential list --id %s --query '[].subject' -o tsv\n" "$APP_ID"

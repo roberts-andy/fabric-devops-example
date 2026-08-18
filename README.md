@@ -65,8 +65,12 @@ whichever fits your shell — from Azure Cloud Shell or any machine with `az` an
 .\scripts\setup\bootstrap.ps1 -CapacityId  <guid>    # native Windows PowerShell
 ```
 
-It automates steps 2, 6, and 7 below and most of 4–5; see
-[`docs/bootstrap.md`](docs/bootstrap.md) for the three remaining Fabric-admin steps.
+It wires up the Entra identity, OIDC federated credentials, GitHub environments,
+labels, variables, and secrets. Three Fabric-admin steps stay off by default and
+are printed as a checklist; opt into any of them with `--github-pat`,
+`--make-capacity-admin`, and `--enable-tenant-settings` (PowerShell:
+`-GitHubPat`, `-MakeCapacityAdmin`, `-EnableTenantSettings`) to automate them
+too. See [`docs/bootstrap.md`](docs/bootstrap.md) for details and `--dry-run`.
 
 1. Read [`docs/architecture.md`](docs/architecture.md) and [`docs/bootstrap.md`](docs/bootstrap.md).
 2. Create the Entra application and GitHub OIDC federated credential.

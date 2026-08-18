@@ -27,9 +27,38 @@ Run `./scripts/setup/bootstrap.sh --help` (or `Get-Help .\scripts\setup\bootstra
 for all flags, or add `--dry-run` / `-DryRun` to preview every change without
 touching Azure or GitHub.
 
-Three things stay manual because they require Fabric-admin rights or interactive
-auth — the script prints them as a checklist when it finishes, and they map to
-the sections below:
+### Optional one-shot Fabric-admin automation
+
+Three steps require Fabric-admin rights or interactive auth. They stay **off by
+default** (a plain run just prints them as a checklist), but you can opt into any
+of them per flag. Each uses your signed-in `az` token to call the Fabric REST API,
+so you must be a Fabric administrator:
+
+| bash flag | PowerShell flag | What it does |
+|---|---|---|
+| `--github-pat <pat>` | `-GitHubPat <pat>` | Create the Fabric → GitHub connection (GitHub Source Control, PAT auth) and store its id as the `FABRIC_GITHUB_CONNECTION_ID` secret. |
+| `--make-capacity-admin` | `-MakeCapacityAdmin` | Add the service principal to the Fabric capacity's Azure administrators. |
+| `--enable-tenant-settings` | `-EnableTenantSettings` | Enable the two developer tenant settings the SP needs (`ServicePrincipalAccessPermissionAPIs` and `ServicePrincipalAccessGlobalAPIs`), scoped to a security group. Preview admin API. |
+| `--sp-group-id <guid>` | `-SpGroupId <guid>` | Use an existing security group for `--enable-tenant-settings`. Default: create `<app-name>-sp` and add the SP. |
+
+Example — wire everything in one run:
+
+```bash
+./scripts/setup/bootstrap.sh --capacity-id <guid> \
+  --github-pat <github-pat> --make-capacity-admin --enable-tenant-settings
+```
+
+Notes:
+
+- The PAT is passed on stdin to `curl`, never on the command line, and is never
+  echoed (including under `--dry-run`).
+- `--make-capacity-admin` appends the SP to the capacity's existing admins (it
+  never replaces them). If the capacity isn't visible to the API it is skipped
+  and the checklist note stays.
+- Anything you don't opt into is still printed as the checklist below; when all
+  three are automated the script prints *"All Fabric-admin steps were automated"*.
+
+Whatever stays manual maps to the sections below:
 
 1. Enable the tenant setting **"Service principals can use Fabric APIs"** (§2).
 2. Add the service principal as a **capacity admin** (§2).
